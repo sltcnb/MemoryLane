@@ -5,13 +5,18 @@ import os
 import sys
 import time
 
-from . import PRODUCT, __version__
-from . import collect, ewf, raw
+from . import PRODUCT, __version__, collect, ewf, raw
 from .hashing import DEFAULT as DEFAULT_HASHES, SUPPORTED, MultiHash
 from .progress import Progress, human
 from .report import Acquisition
-from .source import (Source, SourceError, list_devices, mounted_volumes,
-                     whole_disk_of_device, whole_disk_of_path)
+from .source import (
+    Source,
+    SourceError,
+    list_devices,
+    mounted_volumes,
+    whole_disk_of_device,
+    whole_disk_of_path,
+)
 
 DEFAULT_BLOCK = 1 << 20
 _SUFFIXES = (("TB", 1 << 40), ("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10),
@@ -760,8 +765,9 @@ def cmd_info(args):
             print(f"  Chunks:            {reader.chunk_count:,}")
             print(f"  Media type:        "
                   f"{_MEDIA_NAMES.get(reader.media_type, reader.media_type)}")
+            levels = {0: "none", 1: "fast", 2: "best"}
             print(f"  Compression:       "
-                  f"{['none', 'fast', 'best'][reader.compression] if reader.compression in (0, 1, 2) else reader.compression}")
+                  f"{levels.get(reader.compression, reader.compression)}")
             print(f"  Geometry:          C/H/S {'/'.join(str(x) for x in reader.geometry)}")
             for key, label in _HEADER_LABELS:
                 value = reader.metadata.get(key)

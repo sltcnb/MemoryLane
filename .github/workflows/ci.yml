@@ -18,7 +18,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install pytest ruff
+      # Pinned: an unpinned ruff changes what CI enforces without a commit.
+      - run: pip install pytest 'ruff==0.16.3'
       - name: Install libewf (interop cross-check)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ewf-tools

@@ -42,5 +42,13 @@ include = ["memorylane*"]
 target-version = "py310"
 line-length = 100
 
+[tool.ruff.lint]
+# Pinned explicitly: relying on ruff's defaults means a new release can change
+# what CI enforces without a commit here.
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

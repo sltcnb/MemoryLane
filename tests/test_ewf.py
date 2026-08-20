@@ -9,7 +9,6 @@ import pytest
 
 from memorylane import ewf
 
-
 # ----------------------------------------------------------- spec validator
 
 def walk_sections(path, strict=True):
