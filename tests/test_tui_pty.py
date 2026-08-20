@@ -5,21 +5,23 @@ exercises — drawing, key dispatch and the worker thread — by running an actu
 acquisition from keystrokes and checking the evidence lands on disk.
 """
 
-import fcntl
 import os
 import re
 import select
 import struct
 import subprocess
 import sys
-import termios
 import time
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt" or not hasattr(os, "openpty"),
-    reason="needs a POSIX pseudo-terminal")
+# fcntl/termios do not exist on Windows, and a module-level import would fail
+# during collection before any skip marker could apply.
+fcntl = pytest.importorskip("fcntl", reason="needs a POSIX pseudo-terminal")
+termios = pytest.importorskip("termios",
+                              reason="needs a POSIX pseudo-terminal")
+pytestmark = pytest.mark.skipif(not hasattr(os, "openpty"),
+                                reason="needs a POSIX pseudo-terminal")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ncurses puts the terminal in application-cursor mode (smkx) when keypad is
@@ -31,10 +33,12 @@ BACKSPACE = b"\x7f"
 class Screen:
     """A TUI running on a pty, with helpers to type and to wait for text."""
 
+    rows, cols = 40, 120
+
     def __init__(self, cwd):
         self.master, slave = os.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ,
-                    struct.pack("HHHH", 40, 120, 0, 0))
+                    struct.pack("HHHH", self.rows, self.cols, 0, 0))
         env = dict(os.environ, TERM="xterm", PYTHONPATH=ROOT)
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "memorylane", "tui"],
@@ -66,15 +70,88 @@ class Screen:
         return False
 
     def plain(self):
-        """Strip escape sequences so assertions read like the visible text."""
-        return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][B0]|\x1b[=>]",
-                      " ", self.buffer)
+        """Replay the output into a character grid and return what is visible.
+
+        Stripping escape sequences textually is not good enough: ncurses moves
+        the cursor mid-line, so a sequence can land inside a word and split it.
+        Replaying the moves reproduces the screen the operator sees.
+        """
+        grid = [[" "] * self.cols for _ in range(self.rows)]
+        row = col = 0
+        data, i = self.buffer, 0
+        while i < len(data):
+            ch = data[i]
+            if ch == "\x1b":
+                m = re.match(r"\x1b\[([0-9;]*)([A-Za-z@])", data[i:])
+                if m:
+                    params = [int(x) for x in m.group(1).split(";") if x]
+                    cmd, n = m.group(2), (params[0] if params else 1)
+                    if cmd == "H":
+                        row = params[0] - 1 if params else 0
+                        col = params[1] - 1 if len(params) > 1 else 0
+                    elif cmd == "J":
+                        grid = [[" "] * self.cols for _ in range(self.rows)]
+                    elif cmd == "K":
+                        for x in range(col, self.cols):
+                            grid[row][x] = " "
+                    elif cmd == "C":
+                        col = min(self.cols - 1, col + n)
+                    elif cmd == "D":
+                        col = max(0, col - n)
+                    elif cmd == "A":
+                        row = max(0, row - n)
+                    elif cmd == "B":
+                        row = min(self.rows - 1, row + n)
+                    elif cmd == "G":
+                        col = params[0] - 1 if params else 0
+                    elif cmd == "d":
+                        row = params[0] - 1 if params else 0
+                    i += m.end()
+                    continue
+                other = re.match(r"\x1b[()][B0]|\x1b[=>]|\x1b\][^\x07]*\x07"
+                                 r"|\x1b[78M]", data[i:])
+                i += other.end() if other else 1
+                continue
+            if ch == "\r":
+                col = 0
+            elif ch == "\n":
+                row, col = min(row + 1, self.rows - 1), 0
+            elif ch == "\x08":
+                col = max(0, col - 1)
+            elif 0 <= row < self.rows and 0 <= col < self.cols:
+                grid[row][col] = ch
+                col += 1
+            i += 1
+        return "\n".join("".join(line).rstrip() for line in grid)
 
     def type(self, data, settle=0.25):
-        os.write(self.master, data if isinstance(data, bytes)
-                 else data.encode())
+        """Send input in small chunks: a slow runner redraws the whole screen
+        between keystrokes, and one huge write can outrun it."""
+        raw = data if isinstance(data, bytes) else data.encode()
+        for i in range(0, len(raw), 16):
+            os.write(self.master, raw[i:i + 16])
+            time.sleep(0.02)
+            self.read(0.01)
         time.sleep(settle)
         self.read(0.15)
+
+    def type_into_field(self, text, timeout=20):
+        """Type text and wait until the screen shows it, retrying the tail."""
+        self.type(text)
+        deadline = time.monotonic() + timeout
+        needle = text[-24:]
+        while time.monotonic() < deadline:
+            if needle in self.plain():
+                return True
+            self.read(0.2)
+        return False
+
+    def diagnose(self, note=""):
+        alive = self.proc.poll() is None
+        tail = "\n".join(line for line in self.plain().splitlines()
+                          if line.strip())[-2000:]
+        return (f"{note}\nchild alive: {alive} (exit {self.proc.returncode})"
+                f"\n--- screen ---\n{tail}")
 
     def close(self):
         try:
@@ -133,24 +210,24 @@ def test_tui_acquires_an_image_from_keystrokes(screen, tmp_path):
 
     assert screen.wait_for(r"Select a source", timeout=20)
     assert goto_manual_entry(screen), screen.plain()[-1500:]
-    screen.type(str(source))
-    assert screen.wait_for(re.escape(source.name), timeout=10)
+    assert screen.type_into_field(str(source)), screen.diagnose("typing source")
     screen.type(ENTER)
 
-    assert screen.wait_for(r"Output base", timeout=15), screen.plain()[-1500:]
+    assert screen.wait_for(r"Output base", timeout=20), screen.diagnose("form")
     screen.type(BACKSPACE * 250, settle=0.4)            # clear the suggestion
     target = tmp_path / "fromtui"
-    screen.type(str(target))
+    assert screen.type_into_field(str(target)), screen.diagnose("typing output")
 
-    assert goto_form_row(screen, "Segment size")
+    assert goto_form_row(screen, "Segment size"), screen.diagnose("segment row")
     screen.type(BACKSPACE * 16, settle=0.3)
     screen.type("0")
-    assert screen.wait_for(r"mlane acquire", timeout=10)
+    assert screen.wait_for(r"mlane acquire", timeout=15), \
+        screen.diagnose("command preview")
 
-    assert goto_form_row(screen, "Start acquisition")
+    assert goto_form_row(screen, "Start acquisition"), screen.diagnose("start row")
     screen.type(ENTER, settle=0.5)
-    assert screen.wait_for(r"VERIFIED|finished", timeout=90), \
-        screen.plain()[-2500:]
+    assert screen.wait_for(r"VERIFIED|finished", timeout=120), \
+        screen.diagnose("waiting for the job to finish")
 
     assert (tmp_path / "fromtui.E01").exists()
     summary = (tmp_path / "fromtui.E01.txt").read_text()
@@ -165,12 +242,12 @@ def test_tui_refuses_an_empty_output(screen, tmp_path):
     source = tmp_path / "e.bin"
     source.write_bytes(b"\x00" * 4096)
     assert screen.wait_for(r"Select a source", timeout=20)
-    assert goto_manual_entry(screen)
-    screen.type(str(source))
+    assert goto_manual_entry(screen), screen.diagnose("manual entry")
+    assert screen.type_into_field(str(source)), screen.diagnose("typing source")
     screen.type(ENTER)
-    assert screen.wait_for(r"Output base", timeout=15)
+    assert screen.wait_for(r"Output base", timeout=20), screen.diagnose("form")
     screen.type(BACKSPACE * 250, settle=0.4)
-    assert goto_form_row(screen, "Start acquisition")
+    assert goto_form_row(screen, "Start acquisition"), screen.diagnose("start")
     screen.type(ENTER, settle=0.5)
-    assert screen.wait_for(r"cannot start", timeout=10)
+    assert screen.wait_for(r"cannot start", timeout=15), screen.diagnose("guard")
     assert not list(tmp_path.glob("*.E01"))
