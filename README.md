@@ -45,6 +45,9 @@ sudo mlane acquire /dev/disk4 -o /cases/2026-042/usb --resume
 mlane collect /var/log /Users/suspect/Documents -o /cases/2026-042/files \
       -x '*.iso' --max-size 500MB --case-number 2026-042
 
+# or drive the whole thing from a console interface
+mlane tui
+
 # what is attached?
 mlane devices
 
@@ -78,6 +81,59 @@ MemoryLane 0.1.0
   Summary: case2026-042.E01.txt
   VERIFIED
 ```
+
+### The console interface
+
+`mlane tui` is a small full-screen front end for operators who would rather not
+remember flags. It lists the attached drives, takes the case details, and shows
+the acquisition running.
+
+```
+ MemoryLane 0.1.0
+
+  Select a source to image:
+
+  -> /dev/disk0              465.9 GB  Apple Fabric fixed      APPLE SSD AP0512Z
+     /dev/disk4              238.5 GB  USB          removable  Kingston DataTraveler 3.0
+
+     File or path: _
+
+  up/down select   enter continue   r rescan   q quit
+```
+
+```
+ MemoryLane 0.1.0
+
+  Source: /dev/disk4
+
+     Output base            /cases/2026-042/usb
+     Format                 e01
+     Compression            fast
+     Segment size           1500MB
+     Hashes                 md5,sha1
+     Case number            2026-042
+     Evidence number        001
+     Description
+     Examiner               N. Buisson
+     Notes
+     Verify after writing   yes
+     Resume if unfinished   no
+  -> Start acquisition      <press enter>                  (enter here, or F5 from anywhere)
+
+  mlane acquire /dev/disk4 -o /cases/2026-042/usb -f e01 -s 1500MB --hash md5,sha1 -c fast
+
+  up/down field   left/right toggle   type to edit   enter on Start (or F5) begins   esc back
+```
+
+The form shows the equivalent command line as you fill it in, so the TUI
+doubles as a way to learn the CLI — and it *is* that command line: the form
+builds an argument list, argparse parses it, and the same `acquire` code runs.
+There is no second acquisition path that could drift from the tested one.
+Cancelling raises the same interrupt Ctrl-C does, so a cancelled job leaves the
+evidence marked incomplete and `--resume` can pick it up.
+
+On Windows the TUI needs `pip install windows-curses`; the command line does
+not.
 
 ### The `.txt` summary
 
@@ -304,7 +360,7 @@ Linux. File and image sources are fully exercised.
 pytest -q
 ```
 
-125 tests. The suite round-trips every compression level and segment layout,
+147 tests. The suite round-trips every compression level and segment layout,
 validates the written E01 against the EWF structure spec (descriptor chain,
 section order, every adler32), proves threaded and single-threaded output are
 byte-identical, checks the summary against FTK's exact line format, simulates
@@ -313,7 +369,9 @@ across segments and after a hard kill, and asserts that tampered, truncated,
 aborted and corrupt images — and tampered or stowaway-carrying collections —
 are detected rather than silently accepted. With libewf installed it also
 cross-validates against `ewfverify` / `ewfinfo` / `ewfacquire` / `ewfexport`,
-including the `error2` defect list.
+including the `error2` defect list. The TUI is driven through a real
+pseudo-terminal: the test types a path, fills the form, starts the job from
+keystrokes and then reads the resulting E01 back byte for byte.
 
 ## License
 

@@ -17,6 +17,7 @@ from .source import (
     whole_disk_of_device,
     whole_disk_of_path,
 )
+from .ui import ConsoleReporter
 
 DEFAULT_BLOCK = 1 << 20
 _SUFFIXES = (("TB", 1 << 40), ("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10),
@@ -70,9 +71,9 @@ def open_image(path):
     return raw.RawReader(path)
 
 
-def hash_stream(reader, algorithms, label, quiet):
+def hash_stream(reader, algorithms, label, rep):
     hasher = MultiHash(algorithms)
-    bar = Progress(label, getattr(reader, "size", 0), enabled=not quiet)
+    bar = rep.progress(label, getattr(reader, "size", 0))
     for block in reader.stream(DEFAULT_BLOCK):
         hasher.update(block)
         bar.advance(len(block))
@@ -83,12 +84,15 @@ def hash_stream(reader, algorithms, label, quiet):
 
 # ------------------------------------------------------------------ acquire
 
-def cmd_acquire(args):
+def cmd_acquire(args, reporter=None):
+    """Acquire `args.source` into evidence. Reports through `reporter`, so the
+    CLI and the TUI drive exactly the same acquisition code."""
+    rep = reporter or ConsoleReporter(quiet=args.quiet)
     try:
         source = Source(args.source, sector_size=args.sector_size,
                         retries=args.retries)
     except SourceError as e:
-        print(f"error: {e}", file=sys.stderr)
+        rep.error(f"error: {e}")
         return 2
 
     with source:
@@ -101,20 +105,20 @@ def cmd_acquire(args):
         os.makedirs(parent, exist_ok=True)
 
         if not args.force and _same_device(source, parent):
-            print(f"error: destination {parent} lives on the source device; "
-                  "image to different media (override with --force)",
-                  file=sys.stderr)
+            rep.error(f"error: destination {parent} lives on the source "
+                      "device; image to different media (override with "
+                      "--force)")
             return 2
 
         if source.is_device:
-            status = _check_mounts(source, args.force, args.quiet)
+            status = _check_mounts(source, args.force, args.quiet, rep)
             if status:
                 return status
 
         try:
             algorithms = _hash_list(args.hash)
         except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
+            rep.error(f"error: {e}")
             return 2
 
         meta = {
@@ -137,13 +141,13 @@ def cmd_acquire(args):
                                 else raw.glob_segments(first_segment))
                     if os.path.exists(p)]
         if existing and not (args.force or args.resume):
-            print(f"error: {existing[0]} already exists "
-                  f"({len(existing)} segment(s)); use --resume to continue it "
-                  "or --force to overwrite", file=sys.stderr)
+            rep.error(f"error: {existing[0]} already exists "
+                      f"({len(existing)} segment(s)); use --resume to continue "
+                      "it or --force to overwrite")
             return 2
         if args.resume and not existing:
-            print(f"error: nothing to resume: {first_segment} does not exist",
-                  file=sys.stderr)
+            rep.error(f"error: nothing to resume: {first_segment} does not "
+                      "exist")
             return 2
 
         hasher = MultiHash(algorithms)
@@ -165,7 +169,7 @@ def cmd_acquire(args):
                                        single=single)
         except (ewf.EwfError, OSError) as e:
             hasher.close()
-            print(f"error: {e}", file=sys.stderr)
+            rep.error(f"error: {e}")
             return 2
         total = writer.media_size if args.format == "e01" else source.size
 
@@ -175,50 +179,47 @@ def cmd_acquire(args):
         in_use = getattr(writer, "compression", args.compress)
         split_in_use = writer.segment_size
         if args.resume and args.format == "e01" and in_use != args.compress:
-            print(f"  note: continuing with the image's own {in_use} "
-                  f"compression, not --compress {args.compress}",
-                  file=sys.stderr)
-        if not args.quiet:
-            print(f"{PRODUCT}")
-            print(f"  Source: {source.path}  ({human(source.size)}, "
-                  f"{source.sector_count:,} x {source.sector_size} byte sectors)")
-            print(f"  Model:  {source.model}  [{source.interface}]")
-            print(f"  Output: {first}  ({args.format.upper()}"
-                  + (f", {in_use} compression" if args.format == "e01" else "")
-                  + (f", {human(split_in_use)} segments" if split_in_use
-                     else ", unsplit")
-                  + ")")
+            rep.warn(f"  note: continuing with the image's own {in_use} "
+                     f"compression, not --compress {args.compress}")
+        rep.info(f"{PRODUCT}")
+        rep.info(f"  Source: {source.path}  ({human(source.size)}, "
+                 f"{source.sector_count:,} x {source.sector_size} byte sectors)")
+        rep.info(f"  Model:  {source.model}  [{source.interface}]")
+        rep.info(f"  Output: {first}  ({args.format.upper()}"
+                 + (f", {in_use} compression" if args.format == "e01" else "")
+                 + (f", {human(split_in_use)} segments" if split_in_use
+                    else ", unsplit")
+                 + ")")
 
         if args.resume:
             if offset >= total:
-                print("error: the existing image already covers the whole "
-                      "source; nothing left to acquire", file=sys.stderr)
+                rep.error("error: the existing image already covers the whole "
+                          "source; nothing left to acquire")
                 writer.close()
                 hasher.close()
                 return 2
-            if not args.quiet:
-                trimmed = getattr(writer, "trimmed", 0)
-                print(f"  Resuming at {human(offset)} of {human(total)}"
-                      + (f", trimmed {human(trimmed)} of interrupted tail"
-                         if trimmed else ""))
+            trimmed = getattr(writer, "trimmed", 0)
+            rep.info(f"  Resuming at {human(offset)} of {human(total)}"
+                     + (f", trimmed {human(trimmed)} of interrupted tail"
+                        if trimmed else ""))
             # Digest state cannot be carried across a restart, so rebuild it
             # from the bytes already committed to the image.
-            rebuild = Progress("  Rehashing", offset, enabled=not args.quiet)
+            rebuild = rep.progress("  Rehashing", offset)
             with open_image(first) as done_so_far:
                 for block in done_so_far.stream(DEFAULT_BLOCK, limit=offset):
                     hasher.update(block)
                     rebuild.advance(len(block))
             rebuild.finish()
             if hasher.length != offset:
-                print(f"error: could only re-hash {hasher.length} of {offset} "
-                      "committed bytes; the existing image is damaged",
-                      file=sys.stderr)
+                rep.error(f"error: could only re-hash {hasher.length} of "
+                          f"{offset} committed bytes; the existing image is "
+                          "damaged")
                 writer.close()
                 hasher.close()
                 return 2
 
         carried = offset
-        bar = Progress("  Imaging", total, enabled=not args.quiet)
+        bar = rep.progress("  Imaging", total)
         bar.done = offset
         block = max(args.block_size, source.sector_size)
         try:
@@ -243,9 +244,8 @@ def cmd_acquire(args):
             # Leave the set explicitly unfinished rather than closing it out as
             # a complete image whose missing tail reads as zeros.
             writer.abort() if hasattr(writer, "abort") else writer.close()
-            print(f"\naborted at {human(offset)} of {human(total)}; partial "
-                  "evidence left in place and marked incomplete",
-                  file=sys.stderr)
+            rep.error(f"\naborted at {human(offset)} of {human(total)}; "
+                      "partial evidence left in place and marked incomplete")
             return 130
         elapsed = bar.finish()
         hasher.close()
@@ -262,24 +262,23 @@ def cmd_acquire(args):
         report.hashes = hasher.digests()
         report.data_size = total
         report.sector_count = -(-total // source.sector_size)
-        if not args.quiet:
-            fresh = total - carried
-            rate = fresh / elapsed if elapsed else 0
-            print(f"  Imaged {human(fresh)} in {elapsed:,.1f}s ({human(rate)}/s)"
-                  + (f", {human(carried)} carried over" if carried else "")
-                  + f" -> {len(segments)} segment(s)")
-            for name, value in report.hashes.items():
-                print(f"    {name.upper():<7} {value}")
-            if source.bad_sectors:
-                print(f"  WARNING: {source.bad_sectors.count} unreadable sector(s) "
-                      "replaced with zeros")
+        fresh = total - carried
+        rate = fresh / elapsed if elapsed else 0
+        rep.info(f"  Imaged {human(fresh)} in {elapsed:,.1f}s ({human(rate)}/s)"
+                 + (f", {human(carried)} carried over" if carried else "")
+                 + f" -> {len(segments)} segment(s)")
+        for name, value in report.hashes.items():
+            rep.info(f"    {name.upper():<7} {value}")
+        if source.bad_sectors:
+            rep.warn(f"  WARNING: {source.bad_sectors.count} unreadable "
+                     "sector(s) replaced with zeros")
 
         status = 0
         if not args.no_verify:
             report.verify_started = time.time()
             with open_image(first) as reader:
                 verifier, velapsed = hash_stream(reader, algorithms,
-                                                 "  Verifying", args.quiet)
+                                                 "  Verifying", rep)
                 stored_md5 = getattr(reader, "stored_md5", None)
                 if getattr(reader, "complete", True) is False:
                     report.errors.append("Image set has no closing 'done' section")
@@ -290,21 +289,21 @@ def cmd_acquire(args):
             if stored_md5 and stored_md5 != report.verify_hashes.get("md5"):
                 report.errors.append(
                     f"Stored E01 MD5 {stored_md5} does not match read-back")
-            if not args.quiet:
-                print(f"  Verified in {velapsed:,.1f}s")
-                for name, value in report.verify_hashes.items():
-                    ok = report.hashes.get(name) == value
-                    print(f"    {name.upper():<7} {value} : "
-                          f"{'verified' if ok else 'MISMATCH'}")
+            rep.info(f"  Verified in {velapsed:,.1f}s")
+            for name, value in report.verify_hashes.items():
+                ok = report.hashes.get(name) == value
+                rep.info(f"    {name.upper():<7} {value} : "
+                         f"{'verified' if ok else 'MISMATCH'}")
             if not report.verified or report.errors:
                 status = 1
 
         txt = report.write(first + ".txt")
-        if not args.quiet:
-            print(f"  Summary: {txt}")
-            print("  " + ("VERIFIED" if report.verified
-                          else "NOT VERIFIED" if report.verified is None
-                          else "VERIFICATION FAILED"))
+        report.summary_path = txt
+        rep.info(f"  Summary: {txt}")
+        rep.info("  " + ("VERIFIED" if report.verified
+                         else "NOT VERIFIED" if report.verified is None
+                         else "VERIFICATION FAILED"))
+        rep.result(report)
         return status
 
 
@@ -317,7 +316,7 @@ def _reopen(args, base, source, segment_size, single):
     return raw.RawWriter.resume(base, segment_size=segment_size, single=single)
 
 
-def _check_mounts(source, force, quiet):
+def _check_mounts(source, force, quiet, rep):
     """Imaging a mounted, writable volume yields a smeared image. Say so."""
     disk = whole_disk_of_device(source.path)
     mounts = mounted_volumes(disk)
@@ -331,18 +330,18 @@ def _check_mounts(source, force, quiet):
     if writable and not force:
         unmount = (f"diskutil unmountDisk {node}" if sys.platform == "darwin"
                    else f"umount {writable[0][0]}")
-        print(f"error: {node} has volumes mounted for writing:\n{listing}\n"
-              f"       unmount first ({unmount}), or pass --force to image "
-              "a live filesystem anyway", file=sys.stderr)
+        rep.error(f"error: {node} has volumes mounted for writing:\n{listing}"
+                  f"\n       unmount first ({unmount}), or pass --force to "
+                  "image a live filesystem anyway")
         return 2
     if writable:
         # Forced: the image will be inconsistent, so never stay quiet about it.
-        print(f"WARNING: imaging {node} with {len(writable)} writable volume(s) "
-              f"still mounted; the image will not be a consistent "
-              f"point-in-time copy:\n{listing}", file=sys.stderr)
+        rep.warn(f"WARNING: imaging {node} with {len(writable)} writable "
+                 "volume(s) still mounted; the image will not be a consistent "
+                 f"point-in-time copy:\n{listing}")
     elif not quiet:
-        print(f"  note: {len(mounts)} read-only volume(s) mounted on {node}:\n"
-              f"{listing}", file=sys.stderr)
+        rep.warn(f"  note: {len(mounts)} read-only volume(s) mounted on "
+                 f"{node}:\n{listing}")
     return 0
 
 
@@ -397,7 +396,8 @@ def cmd_verify(args):
 
         print(f"Verifying {args.image}  ({human(reader.size)}, "
               f"{len(reader.segments)} segment(s))")
-        hasher, elapsed = hash_stream(reader, algorithms, "  Hashing", args.quiet)
+        hasher, elapsed = hash_stream(reader, algorithms, "  Hashing",
+                                      ConsoleReporter(quiet=args.quiet))
         digests = hasher.digests()
         failures = 0
         if getattr(reader, "complete", True) is False:
@@ -835,6 +835,14 @@ def cmd_devices(args):
     return 0
 
 
+# ---------------------------------------------------------------------- tui
+
+def cmd_tui(args):
+    from . import tui
+
+    return tui.main()
+
+
 # --------------------------------------------------------------------- main
 
 def build_parser():
@@ -947,6 +955,10 @@ def build_parser():
     i = sub.add_parser("info", help="print image metadata (ewfinfo-style)")
     i.add_argument("image")
     i.set_defaults(func=cmd_info)
+
+    t = sub.add_parser("tui", aliases=["ui"],
+                       help="full-screen console interface")
+    t.set_defaults(func=cmd_tui)
 
     d = sub.add_parser("devices", aliases=["list"],
                        help="list attached physical drives")
