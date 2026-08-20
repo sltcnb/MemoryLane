@@ -284,6 +284,20 @@ sudo mlane acquire /dev/sdb   -o out/usb            # Linux
 mlane acquire \\.\PhysicalDrive1 -o out\usb         # Windows (admin shell)
 ```
 
+### A note on Windows
+
+`os.pread` is POSIX-only, so on Windows the package falls back to a seek+read
+guarded by a per-descriptor lock — the inflate pool reads one descriptor from
+several threads, and that pair is not atomic. CI runs the whole suite on
+Windows *and* runs it on Linux and macOS with the fallback forced
+(`MEMORYLANE_NO_PREAD=1`), so the Windows read path is covered everywhere.
+
+What is still unproven on Windows is physical-device acquisition: CI has no
+disks to image, so `\\.\PhysicalDrive` reads and the `Get-Disk` identity probe
+have never run against real hardware. The mounted-source guard is also a no-op
+there, since the volume-to-disk mapping is only implemented for macOS and
+Linux. File and image sources are fully exercised.
+
 ## Tests
 
 ```sh

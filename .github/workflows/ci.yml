@@ -25,3 +25,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ewf-tools
       - run: ruff check memorylane tests
       - run: pytest -q
+      # Windows has no os.pread; the package falls back to a locked seek+read.
+      # Force that path here so it is covered on every platform, not only by
+      # the Windows jobs.
+      - name: Tests with the Windows read path forced
+        if: runner.os != 'Windows'
+        env:
+          MEMORYLANE_NO_PREAD: '1'
+        run: pytest -q

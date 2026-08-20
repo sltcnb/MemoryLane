@@ -55,26 +55,20 @@ def test_missing_source_is_rejected(tmp_path):
         Source(str(tmp_path / "nope"))
 
 
-def test_unreadable_sectors_are_zero_filled_and_logged(tmp_path, monkeypatch):
+def test_unreadable_sectors_are_zero_filled_and_logged(tmp_path, failing_media):
     """Simulate failing media: sectors 4-5 raise, the rest read normally."""
+    content = bytes(range(256)) * 32                # 8192 bytes = 16 sectors
     path = tmp_path / "flaky.bin"
-    path.write_bytes(bytes(range(256)) * 32)        # 8192 bytes = 16 sectors
-    real_pread = os.pread
-    bad = range(4 * 512, 6 * 512)
-
-    def flaky_pread(fd, length, offset):
-        if offset in bad or (offset < bad.start < offset + length):
-            raise OSError(5, "Input/output error")
-        return real_pread(fd, length, offset)
-
-    monkeypatch.setattr(os, "pread", flaky_pread)
+    path.write_bytes(content)
+    failing_media(path, {4, 5})
     with Source(str(path)) as s:
         data = s.read(0, 8192)
-        assert len(data) == 8192
-        assert data[4 * 512:6 * 512] == b"\x00" * 1024      # holes zero-filled
-        assert data[:2048] == real_pread(s.fd, 2048, 0)     # good data intact
-        assert s.bad_sectors.count == 2
-        assert s.bad_sectors.ranges == [[4, 5]]
+    assert len(data) == 8192
+    assert data[4 * 512:6 * 512] == b"\x00" * 1024      # holes zero-filled
+    assert data[:2048] == content[:2048]                # good data intact
+    assert data[6 * 512:] == content[6 * 512:]
+    assert s.bad_sectors.count == 2
+    assert s.bad_sectors.ranges == [[4, 5]]
 
 
 def test_whole_disk_of_device():

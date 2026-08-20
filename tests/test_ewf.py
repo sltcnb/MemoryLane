@@ -381,3 +381,26 @@ def test_error2_drops_unrepresentable_ranges(tmp_path):
     w.close()
     with ewf.EwfReader(base + ".E01") as r:
         assert r.read_errors == [(10, 1)]
+
+
+def test_windows_read_path_is_correct_under_threads(tmp_path, evidence,
+                                                    monkeypatch):
+    """Force the no-pread fallback and read concurrently.
+
+    Windows has no os.pread, so the package seeks then reads. That pair is not
+    atomic, and the inflate pool reads one descriptor from several threads, so
+    this asserts the serialisation actually holds the offset steady.
+    """
+    from memorylane import _io
+
+    path, data = evidence
+    base = str(tmp_path / "winpath")
+    with ewf.EwfWriter(base, len(data), 512, compression="fast",
+                       segment_size=400_000) as w:
+        w.write(data)
+    monkeypatch.setattr(_io, "HAVE_PREAD", False)
+    for _ in range(3):                   # repeat: races are not deterministic
+        with ewf.EwfReader(base + ".E01", workers=8) as r:
+            assert b"".join(r.stream()) == data
+            assert not r.corrupt_chunks
+            assert r.read(1234, 50_000) == data[1234:51_234]

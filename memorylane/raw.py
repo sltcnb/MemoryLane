@@ -8,6 +8,8 @@ that, and can also emit a single unsplit file.
 import os
 import re
 
+from ._io import close as _close_fd, pread
+
 DEFAULT_SEGMENT_SIZE = 1500 * 1024 * 1024
 
 
@@ -133,7 +135,7 @@ class RawReader:
             for start, size, path in self._map:
                 if start <= position < start + size:
                     take = min(length - len(out), start + size - position)
-                    out += os.pread(self._fd(path), take, position - start)
+                    out += pread(self._fd(path), take, position - start)
                     position += take
                     break
             else:
@@ -150,7 +152,7 @@ class RawReader:
             position = 0
             while position < size and remaining > 0:
                 want = min(block_size, size - position, remaining)
-                data = os.pread(fd, want, position)
+                data = pread(fd, want, position)
                 if not data:
                     break
                 position += len(data)
@@ -159,7 +161,7 @@ class RawReader:
 
     def close(self):
         for fd in self._fds.values():
-            os.close(fd)
+            _close_fd(fd)
         self._fds.clear()
 
     def __enter__(self):

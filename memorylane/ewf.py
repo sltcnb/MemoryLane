@@ -25,6 +25,8 @@ import time
 import uuid
 import zlib
 
+from ._io import close as _close_fd, pread
+
 SIGNATURE = b"EVF\x09\x0d\x0a\xff\x00"
 DESCRIPTOR_SIZE = 76
 VOLUME_SIZE = 1052
@@ -594,13 +596,13 @@ class EwfReader:
         last_section = None
         for index, path in enumerate(self.segments):
             fd = self._fd(index)
-            if os.pread(fd, 8, 0) != SIGNATURE:
+            if pread(fd, 8, 0) != SIGNATURE:
                 raise EwfError(f"{path}: not an EWF/E01 segment")
             offset = 13
             self.tail_offset = offset
             sectors_start = sectors_end = 0
             while True:
-                descriptor = os.pread(fd, DESCRIPTOR_SIZE, offset)
+                descriptor = pread(fd, DESCRIPTOR_SIZE, offset)
                 if len(descriptor) < DESCRIPTOR_SIZE:
                     break
                 stype = descriptor[:16].split(b"\x00", 1)[0]
@@ -614,10 +616,10 @@ class EwfReader:
                 self.tail_offset = offset + max(size, DESCRIPTOR_SIZE)
 
                 if stype in (b"volume", b"disk", b"data"):
-                    self._read_volume(os.pread(fd, VOLUME_SIZE, data_offset))
+                    self._read_volume(pread(fd, VOLUME_SIZE, data_offset))
                 elif stype in (b"header", b"header2") and not self.metadata:
                     self.metadata = parse_header(
-                        os.pread(fd, size - DESCRIPTOR_SIZE, data_offset))
+                        pread(fd, size - DESCRIPTOR_SIZE, data_offset))
                 elif stype == b"sectors":
                     sectors_start, sectors_end = data_offset, offset + size
                 elif stype == b"table":     # table2 is a verbatim duplicate
@@ -626,11 +628,11 @@ class EwfReader:
                 elif stype == b"error2":
                     self._read_error2(fd, data_offset)
                 elif stype == b"digest":
-                    body = os.pread(fd, 36, data_offset)
+                    body = pread(fd, 36, data_offset)
                     self.stored_md5 = body[:16].hex()
                     self.stored_sha1 = body[16:36].hex()
                 elif stype == b"hash":
-                    body = os.pread(fd, 16, data_offset)
+                    body = pread(fd, 16, data_offset)
                     if not self.stored_md5:
                         self.stored_md5 = body.hex()
                 last_section = stype
@@ -660,12 +662,12 @@ class EwfReader:
         self.size = self.sector_count * self.sector_size
 
     def _read_table(self, fd, index, data_offset, sectors_start, sectors_end):
-        head = os.pread(fd, 24, data_offset)
+        head = pread(fd, 24, data_offset)
         count = _u32(head, 0)
         base = _u64(head, 8)
         if not count:
             return []
-        raw = os.pread(fd, count * 4, data_offset + 24)
+        raw = pread(fd, count * 4, data_offset + 24)
         offsets = []
         for i in range(count):
             value = _u32(raw, i * 4)
@@ -686,11 +688,11 @@ class EwfReader:
         self.corrupt_chunks.append((number, reason))
 
     def _read_error2(self, fd, data_offset):
-        head = os.pread(fd, ERROR2_HEADER_SIZE, data_offset)
+        head = pread(fd, ERROR2_HEADER_SIZE, data_offset)
         count = _u32(head, 0)
         if not count:
             return
-        raw = os.pread(fd, count * 8, data_offset + ERROR2_HEADER_SIZE)
+        raw = pread(fd, count * 8, data_offset + ERROR2_HEADER_SIZE)
         for i in range(count):
             self.read_errors.append((_u32(raw, i * 8), _u32(raw, i * 8 + 4)))
 
@@ -700,7 +702,7 @@ class EwfReader:
         failing image still completes and reports a hash mismatch."""
         index, offset, size, compressed = self._chunks[number]
         want = self.chunk_length(number)
-        raw = os.pread(self._fd(index), size or self.chunk_size + 4, offset)
+        raw = pread(self._fd(index), size or self.chunk_size + 4, offset)
         if compressed:
             try:
                 data = zlib.decompress(raw)
@@ -788,7 +790,7 @@ class EwfReader:
             self._pool.shutdown(wait=True)
             self._pool = None
         for fd in self._fds.values():
-            os.close(fd)
+            _close_fd(fd)
         self._fds.clear()
 
     def __enter__(self):

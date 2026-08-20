@@ -22,7 +22,10 @@ def tree(tmp_path):
     (root / "docs" / "report.pdf").write_bytes(bytes(range(256)) * 400)
     (root / "docs" / "nested" / "notes.txt").write_text("notes")
     (root / "scratch.tmp").write_text("disposable")
-    (root / "docs" / "link").symlink_to("../logs/auth.log")
+    try:
+        (root / "docs" / "link").symlink_to("../logs/auth.log")
+    except OSError:                      # Windows without developer mode
+        pass
     return root
 
 
@@ -42,8 +45,15 @@ def by_source(manifest):
 
 
 def test_archive_name_keeps_provenance():
-    assert collect.archive_name("/var/log/auth.log") == "var/log/auth.log"
-    assert not collect.archive_name("/x").startswith("/")
+    name = collect.archive_name("/var/log/auth.log")
+    assert name.endswith("var/log/auth.log")
+    assert not name.startswith("/")
+    assert "\\" not in name
+    if os.name == "nt":
+        # The drive letter is part of the provenance and must be kept.
+        assert name.split("/")[0].isalpha()
+    else:
+        assert name == "var/log/auth.log"
 
 
 def test_collects_files_and_hashes_them(tmp_path, tree):
@@ -65,6 +75,8 @@ def test_collects_files_and_hashes_them(tmp_path, tree):
 
 
 def test_symlinks_are_recorded_not_followed(tmp_path, tree):
+    if not (tree / "docs" / "link").is_symlink():
+        pytest.skip("symlinks unavailable on this platform")
     target = str(tmp_path / "out.zip")
     assert main(["collect", str(tree), "-o", target, "-q"]) == 0
     link = by_source(manifest_of(target))["link"]
@@ -112,6 +124,8 @@ def test_case_metadata_reaches_manifest_and_summary(tmp_path, tree):
     assert "All manifest digests : verified" in summary
 
 
+@pytest.mark.skipif(os.name == "nt",
+                    reason="chmod 000 does not deny reads on Windows")
 def test_unreadable_file_is_recorded_not_dropped(tmp_path, tree):
     secret = tree / "logs" / "auth.log"
     secret.chmod(0o000)
@@ -242,6 +256,9 @@ def test_mode_and_ownership_are_recorded(tmp_path, tree):
     main(["collect", str(tree), "-o", target, "-q"])
     record = by_source(manifest_of(target))["notes.txt"]
     assert record["mode"].startswith("-")
-    assert record["uid"] == os.getuid()
-    assert stat.filemode((tree / "docs" / "nested" / "notes.txt").stat().st_mode) \
-        == record["mode"]
+    source = tree / "docs" / "nested" / "notes.txt"
+    assert stat.filemode(source.stat().st_mode) == record["mode"]
+    if hasattr(os, "getuid"):
+        assert record["uid"] == os.getuid()
+    else:
+        assert record["uid"] is not None

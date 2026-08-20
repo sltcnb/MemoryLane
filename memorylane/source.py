@@ -12,6 +12,8 @@ import stat
 import subprocess
 import sys
 
+from ._io import close as _close_fd, pread
+
 DEFAULT_SECTOR_SIZE = 512
 # BIOS-translated geometry, which is what FTK Imager reports for modern disks.
 HEADS = 255
@@ -133,7 +135,7 @@ class Source:
             return b""
         length = min(length, self.size - offset)
         try:
-            data = os.pread(self.fd, length, offset)
+            data = pread(self.fd, length, offset)
         except OSError:
             data = b""
         if len(data) == length:
@@ -152,7 +154,7 @@ class Source:
             data = b""
             for _ in range(self.retries + 1):
                 try:
-                    data = os.pread(self.fd, take, pos)
+                    data = pread(self.fd, take, pos)
                 except OSError:
                     data = b""
                 if len(data) == take:
@@ -167,7 +169,7 @@ class Source:
     def close(self):
         if getattr(self, "fd", None) is not None:
             try:
-                os.close(self.fd)
+                _close_fd(self.fd)
             finally:
                 self.fd = None
 
@@ -209,7 +211,7 @@ def _size_by_bisect(fd, sector_size):
     """Last resort: binary-search the last readable sector."""
     def readable(lba):
         try:
-            return len(os.pread(fd, sector_size, lba * sector_size)) == sector_size
+            return len(pread(fd, sector_size, lba * sector_size)) == sector_size
         except OSError:
             return False
 
