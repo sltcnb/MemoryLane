@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memorylane"
+version = "0.1.0"
+description = "Forensic disk imager writing raw (dd) and EWF/E01 evidence with FTK Imager-compatible output"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["forensics", "dfir", "disk-imaging", "e01", "ewf", "encase",
+            "ftk-imager", "evidence", "chain-of-custody", "dd"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: System :: Archiving :: Backup",
+    "Topic :: System :: Recovery Tools",
+]
+
+[project.urls]
+Homepage = "https://github.com/sltcnb/MemoryLane"
+Repository = "https://github.com/sltcnb/MemoryLane"
+Issues = "https://github.com/sltcnb/MemoryLane/issues"
+
+[project.scripts]
+mlane = "memorylane.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["memorylane*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

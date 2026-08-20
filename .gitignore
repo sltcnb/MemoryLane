@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# acquisition output (evidence — never commit)
+out/
+cases/
+*.img
+*.dd
+*.raw
+*.e01
+*.E01
+*.E[0-9][0-9]
+*.s01
+*.l01
+*.ex01
+*.[0-9][0-9][0-9]
+*.E01.txt
+*.001.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# logical collections (evidence — never commit)
+*.zip
+MemoryLane-manifest.*
