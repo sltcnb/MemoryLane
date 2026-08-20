@@ -8,7 +8,7 @@ that, and can also emit a single unsplit file.
 import os
 import re
 
-from ._io import close as _close_fd, pread
+from ._io import close as _close_fd, open_read, pread
 
 DEFAULT_SEGMENT_SIZE = 1500 * 1024 * 1024
 
@@ -121,7 +121,7 @@ class RawReader:
     def _fd(self, path):
         fd = self._fds.get(path)
         if fd is None:
-            fd = os.open(path, os.O_RDONLY)
+            fd = open_read(path)
             self._fds[path] = fd
         return fd
 

@@ -12,6 +12,10 @@ import os
 import threading
 
 HAVE_PREAD = hasattr(os, "pread")
+# Without O_BINARY, Windows opens in text mode: CRLF is translated and 0x1A
+# ends the file. Harmless with os.pread, silently corrupting with the
+# seek+read fallback — and evidence must be read verbatim.
+READ_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0)
 
 _locks = {}
 _guard = threading.Lock()
@@ -33,6 +37,11 @@ def pread(fd, length, offset):
     with _lock_for(fd):
         os.lseek(fd, offset, os.SEEK_SET)
         return os.read(fd, length)
+
+
+def open_read(path):
+    """Open a file for verbatim positional reads."""
+    return os.open(path, READ_FLAGS)
 
 
 def forget(fd):

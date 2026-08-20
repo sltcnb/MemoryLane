@@ -12,7 +12,7 @@ import stat
 import subprocess
 import sys
 
-from ._io import close as _close_fd, pread
+from ._io import READ_FLAGS, close as _close_fd, pread
 
 DEFAULT_SECTOR_SIZE = 512
 # BIOS-translated geometry, which is what FTK Imager reports for modern disks.
@@ -67,7 +67,7 @@ class Source:
             if raw:
                 self.path = raw
         try:
-            self.fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+            self.fd = os.open(self.path, READ_FLAGS)
         except OSError as e:
             raise SourceError(f"cannot open {self.path}: {e.strerror}") from e
 

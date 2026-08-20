@@ -25,7 +25,7 @@ import time
 import uuid
 import zlib
 
-from ._io import close as _close_fd, pread
+from ._io import close as _close_fd, open_read, pread
 
 SIGNATURE = b"EVF\x09\x0d\x0a\xff\x00"
 DESCRIPTOR_SIZE = 76
@@ -583,7 +583,7 @@ class EwfReader:
     def _fd(self, index):
         fd = self._fds.get(index)
         if fd is None:
-            fd = os.open(self.segments[index], os.O_RDONLY)
+            fd = open_read(self.segments[index])
             self._fds[index] = fd
         return fd
 

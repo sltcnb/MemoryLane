@@ -8,6 +8,8 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    # A hung job should fail fast, not sit for six hours.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
