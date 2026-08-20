@@ -48,6 +48,56 @@ def walk_sections(path, strict=True):
     return seen
 
 
+def chunk_offset(path, number, skip=0):
+    """File offset of a specific chunk's stored bytes.
+
+    Corrupting a hard-coded offset is not safe: the header sections are
+    zlib-compressed, so where the chunk data starts moves with the zlib
+    version — that is exactly how one of these tests passed everywhere except
+    ubuntu/3.10. Read the real position out of the table instead.
+    """
+    sectors_base = None
+    for stype, offset, size in walk_sections(path):
+        if stype == b"sectors":
+            sectors_base = offset + 76
+        elif stype == b"table" and sectors_base is not None:
+            body_at = offset + 76
+            with open(path, "rb") as f:
+                f.seek(body_at)
+                head = f.read(24)
+                count = struct.unpack("<I", head[:4])[0]
+                base = struct.unpack("<Q", head[8:16])[0]
+                if number >= count:
+                    number -= count            # this chunk is in a later group
+                    sectors_base = None
+                    continue
+                entries = f.read(count * 4)
+            entry = struct.unpack("<I", entries[number * 4:number * 4 + 4])[0]
+            return base + (entry & 0x7FFFFFFF) + skip
+    raise AssertionError(f"chunk {number} not found in {path}")
+
+
+def flip_byte(path, offset):
+    """Invert one byte, so the value always actually changes."""
+    with open(path, "r+b") as f:
+        f.seek(offset)
+        original = f.read(1)
+        f.seek(offset)
+        f.write(bytes([original[0] ^ 0xFF]))
+
+
+def noisy_chunk(data, chunk_size=32768):
+    """Index of a chunk that is not all zeros.
+
+    A damaged chunk is replaced with zeros, so corrupting an all-zero chunk
+    leaves the output byte-identical and proves nothing.
+    """
+    for i in range(0, len(data) // chunk_size):
+        if set(data[i * chunk_size:(i + 1) * chunk_size]) - {0}:
+            return i
+    raise AssertionError("no non-zero chunk in this fixture")
+
+
 def test_segment_naming():
     assert ewf.segment_name("d", 1) == "d.E01"
     assert ewf.segment_name("d", 99) == "d.E99"
@@ -220,11 +270,8 @@ def test_corrupt_chunk_is_reported_not_raised(tmp_path, evidence):
     base = str(tmp_path / "bad")
     with ewf.EwfWriter(base, len(data), 512, compression="fast") as w:
         w.write(data)
-    with open(base + ".E01", "r+b") as f:
-        f.seek(100_000)
-        byte = f.read(1)
-        f.seek(100_000)
-        f.write(bytes([byte[0] ^ 0xFF]))
+    target = noisy_chunk(data)
+    flip_byte(base + ".E01", chunk_offset(base + ".E01", target, skip=8))
     with ewf.EwfReader(base + ".E01") as r:
         out = b"".join(r.stream())
         assert len(out) == r.size            # length preserved
@@ -237,9 +284,7 @@ def test_uncompressed_chunk_checksum_is_checked(tmp_path):
     base = str(tmp_path / "nc")
     with ewf.EwfWriter(base, len(data), 512, compression="none") as w:
         w.write(data)
-    with open(base + ".E01", "r+b") as f:
-        f.seek(2000)
-        f.write(b"\x00")
+    flip_byte(base + ".E01", chunk_offset(base + ".E01", 0, skip=100))
     with ewf.EwfReader(base + ".E01") as r:
         b"".join(r.stream())
         assert r.corrupt_chunks
