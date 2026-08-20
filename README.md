@@ -14,6 +14,11 @@ familiar `image.E01.txt` acquisition summary next to the evidence.
 The E01 writer is implemented from the format up: no libewf, no pyewf, no
 compiled extensions. Pure Python 3.10+, stdlib only.
 
+> **Looking for speed?** [MemoryLane-rs](https://github.com/sltcnb/MemoryLane-rs)
+> is a Rust port of this tool: roughly twice the throughput, plus source
+> re-read verification and page-cache bypass. The two implementations read
+> each other's images, which is asserted in both test suites.
+
 ## Install
 
 ```sh
